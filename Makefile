@@ -53,6 +53,7 @@ ifeq ($(PLATFORM),linux)
 	PLATFORM_SRCS := \
 		$(NOZZLE_DIR)/src/backends/linux/linux_texture.cpp
 	LDFLAGS := -ldrm -lgbm -lEGL -lGL -lstdc++
+	INCLUDES += -I/usr/include/libdrm
 endif
 
 ifeq ($(PLATFORM),windows)
