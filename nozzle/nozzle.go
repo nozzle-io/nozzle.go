@@ -229,6 +229,7 @@ type ConnectedSenderInfo struct {
 	Width           uint32
 	Height          uint32
 	Format          TextureFormat
+	SemanticFormat  TextureFormat
 	EstimatedFPS    float64
 	FrameCounter    uint64
 	LastUpdateTime  uint64
@@ -236,11 +237,12 @@ type ConnectedSenderInfo struct {
 
 // FrameInfo contains frame metadata.
 type FrameInfo struct {
-	FrameIndex       uint64
-	Timestamp        uint64
-	Width            uint32
-	Height           uint32
-	Format           TextureFormat
+	FrameIndex        uint64
+	Timestamp         uint64
+	Width             uint32
+	Height            uint32
+	Format            TextureFormat
+	SemanticFormat    TextureFormat
 	DroppedFrameCount uint32
 }
 
@@ -290,11 +292,6 @@ func NewSender(desc SenderDesc) (*Sender, error) {
 	cAppName := C.CString(desc.ApplicationName)
 	defer C.free(unsafe.Pointer(cName))
 	defer C.free(unsafe.Pointer(cAppName))
-
-	fallback := C.int(0)
-	if desc.AllowFormatFallback {
-		fallback = 1
-	}
 
 	cDesc := C.NozzleSenderDesc{
 		name:                cName,
@@ -409,6 +406,7 @@ func (r *Receiver) ConnectedInfo() (ConnectedSenderInfo, error) {
 		Width:           uint32(raw.width),
 		Height:          uint32(raw.height),
 		Format:          TextureFormat(raw.format),
+		SemanticFormat:  TextureFormat(raw.semantic_format),
 		EstimatedFPS:    float64(raw.estimated_fps),
 		FrameCounter:    uint64(raw.frame_counter),
 		LastUpdateTime:  uint64(raw.last_update_time_ns),
@@ -445,7 +443,8 @@ func (f *Frame) Info() (FrameInfo, error) {
 		Timestamp:        uint64(raw.timestamp_ns),
 		Width:            uint32(raw.width),
 		Height:           uint32(raw.height),
-		Format:           TextureFormat(raw.format),
+		Format:         TextureFormat(raw.format),
+		SemanticFormat: TextureFormat(raw.semantic_format),
 		DroppedFrameCount: uint32(raw.dropped_frame_count),
 	}, nil
 }
@@ -509,6 +508,7 @@ func (f *WritableFrame) Info() (FrameInfo, error) {
 		Width:            uint32(raw.width),
 		Height:           uint32(raw.height),
 		Format:           TextureFormat(raw.format),
+		SemanticFormat:   TextureFormat(raw.semantic_format),
 		DroppedFrameCount: uint32(raw.dropped_frame_count),
 	}, nil
 }
@@ -655,6 +655,11 @@ func (s *Sender) PublishTexture(tex *Texture) error {
 // PublishNativeTexture publishes a native GPU texture directly.
 func (s *Sender) PublishNativeTexture(nativeTexture unsafe.Pointer, width, height uint32, format TextureFormat) error {
 	return checkCode(C.nozzle_sender_publish_native_texture(s.raw, nativeTexture, C.uint32_t(width), C.uint32_t(height), C.NozzleTextureFormat(format)))
+}
+
+// PublishNativeTextureEx publishes a native GPU texture with explicit storage and semantic formats.
+func (s *Sender) PublishNativeTextureEx(nativeTexture unsafe.Pointer, width, height uint32, storageFormat, semanticFormat TextureFormat) error {
+	return checkCode(C.nozzle_sender_publish_native_texture_ex(s.raw, nativeTexture, C.uint32_t(width), C.uint32_t(height), C.NozzleTextureFormat(storageFormat), C.NozzleTextureFormat(semanticFormat)))
 }
 
 // ResolvedFormat returns detailed format resolution info for the frame.
