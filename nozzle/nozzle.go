@@ -297,10 +297,11 @@ func NewSender(desc SenderDesc) (*Sender, error) {
 	}
 
 	cDesc := C.NozzleSenderDesc{
-		name:               cName,
-		application_name:   cAppName,
-		ring_buffer_size:   C.uint32_t(desc.RingBufferSize),
-		allow_format_fallback: fallback,
+		name:                cName,
+		application_name:    cAppName,
+		ring_buffer_size:    C.uint32_t(desc.RingBufferSize),
+		fallback_flags:      C.uint32_t(3),
+		fallback_flags_valid: 1,
 	}
 
 	var raw *C.NozzleSender
