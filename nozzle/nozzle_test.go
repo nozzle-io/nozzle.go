@@ -2,6 +2,7 @@ package nozzle
 
 import (
 	"testing"
+	"unsafe"
 )
 
 func TestTextureFormatBytesPerPixel(t *testing.T) {
@@ -295,4 +296,38 @@ func TestSenderWritableFrame(t *testing.T) {
 
 func TestIsGPUAvailable(t *testing.T) {
 	t.Logf("GPU available: %v", IsGPUAvailable())
+}
+
+func TestFrameInfoHasSemanticFormat(t *testing.T) {
+	fi := FrameInfo{
+		FrameIndex:     42,
+		Timestamp:      12345,
+		Width:          1920,
+		Height:         1080,
+		Format:         FormatBGRA8UNorm,
+		SemanticFormat: FormatRGBA8UNorm,
+	}
+	if fi.SemanticFormat != FormatRGBA8UNorm {
+		t.Errorf("SemanticFormat = %d, want %d", int(fi.SemanticFormat), int(FormatRGBA8UNorm))
+	}
+}
+
+func TestConnectedSenderInfoHasSemanticFormat(t *testing.T) {
+	csi := ConnectedSenderInfo{
+		Name:            "test-sender",
+		ApplicationName: "test-app",
+		ID:              "abc",
+		Backend:         BackendMetal,
+		Width:           1920,
+		Height:          1080,
+		Format:          FormatBGRA8UNorm,
+		SemanticFormat:  FormatRGBA8SRGB,
+	}
+	if csi.SemanticFormat != FormatRGBA8SRGB {
+		t.Errorf("SemanticFormat = %d, want %d", int(csi.SemanticFormat), int(FormatRGBA8SRGB))
+	}
+}
+
+func TestSenderHasPublishNativeTextureEx(t *testing.T) {
+	var _ func(*Sender, unsafe.Pointer, uint32, uint32, TextureFormat, TextureFormat) error = (*Sender).PublishNativeTextureEx
 }
