@@ -689,35 +689,35 @@ func (f *Frame) CopyToNativeTexture(nativeTexture unsafe.Pointer, width, height 
 }
 
 // SwizzleChannels rearranges channel order in pixel data.
-func SwizzleChannels(src, dst []byte, width, height, srcRowBytes, dstRowBytes uint32, format TextureFormat, permuteMap [4]uint8) error {
+func SwizzleChannels(src, dst []byte, width, height int64, srcRowBytes, dstRowBytes int64, format TextureFormat, permuteMap [4]uint8) error {
 	return checkCode(C.nozzle_swizzle_channels(
 		unsafe.Pointer(&src[0]),
 		unsafe.Pointer(&dst[0]),
 		C.uint32_t(width), C.uint32_t(height),
-		C.uint32_t(srcRowBytes), C.uint32_t(dstRowBytes),
+		C.int64_t(srcRowBytes), C.int64_t(dstRowBytes),
 		C.NozzleTextureFormat(format),
 		(*C.uint8_t)(&permuteMap[0]),
 	))
 }
 
 // WidenUint16ToUint32 converts 16-bit pixel data to 32-bit.
-func WidenUint16ToUint32(src, dst []byte, width, height, srcRowBytes, dstRowBytes uint32, channels uint32) error {
+func WidenUint16ToUint32(src, dst []byte, width, height int64, srcRowBytes, dstRowBytes int64, channels uint32) error {
 	return checkCode(C.nozzle_widen_uint16_to_uint32(
 		unsafe.Pointer(&src[0]),
 		unsafe.Pointer(&dst[0]),
 		C.uint32_t(width), C.uint32_t(height),
-		C.uint32_t(srcRowBytes), C.uint32_t(dstRowBytes),
+		C.int64_t(srcRowBytes), C.int64_t(dstRowBytes),
 		C.uint32_t(channels),
 	))
 }
 
 // ConvertUint32ToFloat32 converts 32-bit unsigned integer pixel data to float.
-func ConvertUint32ToFloat32(src, dst []byte, width, height, srcRowBytes, dstRowBytes uint32, channels uint32) error {
+func ConvertUint32ToFloat32(src, dst []byte, width, height int64, srcRowBytes, dstRowBytes int64, channels uint32) error {
 	return checkCode(C.nozzle_convert_uint32_to_float32(
 		unsafe.Pointer(&src[0]),
 		unsafe.Pointer(&dst[0]),
 		C.uint32_t(width), C.uint32_t(height),
-		C.uint32_t(srcRowBytes), C.uint32_t(dstRowBytes),
+		C.int64_t(srcRowBytes), C.int64_t(dstRowBytes),
 		C.uint32_t(channels),
 	))
 }
