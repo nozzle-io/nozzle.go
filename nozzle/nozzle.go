@@ -41,6 +41,7 @@ const (
 	ErrorSenderClosed          ErrorCode = C.NOZZLE_ERROR_SENDER_CLOSED
 	ErrorTimeout               ErrorCode = C.NOZZLE_ERROR_TIMEOUT
 	ErrorBackend               ErrorCode = C.NOZZLE_ERROR_BACKEND_ERROR
+	ErrorCommandFailed         ErrorCode = C.NOZZLE_ERROR_COMMAND_FAILED
 )
 
 func (e ErrorCode) Error() string {
@@ -67,6 +68,8 @@ func (e ErrorCode) Error() string {
 		return "timeout"
 	case ErrorBackend:
 		return "backend error"
+	case ErrorCommandFailed:
+		return "command execution failed"
 	default:
 		return fmt.Sprintf("nozzle error (%d)", int(e))
 	}
