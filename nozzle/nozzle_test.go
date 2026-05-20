@@ -280,7 +280,12 @@ func TestSenderWritableFrame(t *testing.T) {
 	if err != nil {
 		t.Skipf("lock pixels failed: %v", err)
 	}
-	defer frame.UnmapWritablePixels()
+	pixelsLocked := true
+	defer func() {
+		if pixelsLocked {
+			frame.UnmapWritablePixels()
+		}
+	}()
 
 	if pixels.Width != 64 || pixels.Height != 64 {
 		t.Errorf("pixels size = %dx%d, want 64x64", pixels.Width, pixels.Height)
@@ -288,6 +293,8 @@ func TestSenderWritableFrame(t *testing.T) {
 	for i := range pixels.Data {
 		pixels.Data[i] = 0xFF
 	}
+	frame.UnmapWritablePixels()
+	pixelsLocked = false
 
 	if err := s.CommitFrame(frame); err != nil {
 		t.Fatalf("CommitFrame failed: %v", err)
