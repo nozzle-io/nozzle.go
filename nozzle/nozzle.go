@@ -23,6 +23,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"unsafe"
 )
 
@@ -30,18 +31,18 @@ import (
 type ErrorCode int
 
 const (
-	ErrorUnknown               ErrorCode = C.NOZZLE_ERROR_UNKNOWN
-	ErrorInvalidArgument       ErrorCode = C.NOZZLE_ERROR_INVALID_ARGUMENT
-	ErrorUnsupportedBackend    ErrorCode = C.NOZZLE_ERROR_UNSUPPORTED_BACKEND
-	ErrorUnsupportedFormat     ErrorCode = C.NOZZLE_ERROR_UNSUPPORTED_FORMAT
-	ErrorDeviceMismatch        ErrorCode = C.NOZZLE_ERROR_DEVICE_MISMATCH
-	ErrorResourceCreation      ErrorCode = C.NOZZLE_ERROR_RESOURCE_CREATION_FAILED
-	ErrorSharedHandle          ErrorCode = C.NOZZLE_ERROR_SHARED_HANDLE_FAILED
-	ErrorSenderNotFound        ErrorCode = C.NOZZLE_ERROR_SENDER_NOT_FOUND
-	ErrorSenderClosed          ErrorCode = C.NOZZLE_ERROR_SENDER_CLOSED
-	ErrorTimeout               ErrorCode = C.NOZZLE_ERROR_TIMEOUT
-	ErrorBackend               ErrorCode = C.NOZZLE_ERROR_BACKEND_ERROR
-	ErrorCommandFailed         ErrorCode = C.NOZZLE_ERROR_COMMAND_FAILED
+	ErrorUnknown            ErrorCode = C.NOZZLE_ERROR_UNKNOWN
+	ErrorInvalidArgument    ErrorCode = C.NOZZLE_ERROR_INVALID_ARGUMENT
+	ErrorUnsupportedBackend ErrorCode = C.NOZZLE_ERROR_UNSUPPORTED_BACKEND
+	ErrorUnsupportedFormat  ErrorCode = C.NOZZLE_ERROR_UNSUPPORTED_FORMAT
+	ErrorDeviceMismatch     ErrorCode = C.NOZZLE_ERROR_DEVICE_MISMATCH
+	ErrorResourceCreation   ErrorCode = C.NOZZLE_ERROR_RESOURCE_CREATION_FAILED
+	ErrorSharedHandle       ErrorCode = C.NOZZLE_ERROR_SHARED_HANDLE_FAILED
+	ErrorSenderNotFound     ErrorCode = C.NOZZLE_ERROR_SENDER_NOT_FOUND
+	ErrorSenderClosed       ErrorCode = C.NOZZLE_ERROR_SENDER_CLOSED
+	ErrorTimeout            ErrorCode = C.NOZZLE_ERROR_TIMEOUT
+	ErrorBackend            ErrorCode = C.NOZZLE_ERROR_BACKEND_ERROR
+	ErrorCommandFailed      ErrorCode = C.NOZZLE_ERROR_COMMAND_FAILED
 )
 
 func (e ErrorCode) Error() string {
@@ -156,7 +157,7 @@ func (f TextureFormat) BytesPerPixel() int {
 type ReceiveMode C.NozzleReceiveMode
 
 const (
-	ReceiveLatestOnly          ReceiveMode = C.NOZZLE_RECEIVE_LATEST_ONLY
+	ReceiveLatestOnly           ReceiveMode = C.NOZZLE_RECEIVE_LATEST_ONLY
 	ReceiveSequentialBestEffort ReceiveMode = C.NOZZLE_RECEIVE_SEQUENTIAL_BEST_EFFORT
 )
 
@@ -164,11 +165,11 @@ const (
 type FrameStatus C.NozzleFrameStatus
 
 const (
-	FrameNew         FrameStatus = C.NOZZLE_FRAME_NEW
-	FrameNoNew       FrameStatus = C.NOZZLE_FRAME_NO_NEW
-	FrameDropped     FrameStatus = C.NOZZLE_FRAME_DROPPED
+	FrameNew          FrameStatus = C.NOZZLE_FRAME_NEW
+	FrameNoNew        FrameStatus = C.NOZZLE_FRAME_NO_NEW
+	FrameDropped      FrameStatus = C.NOZZLE_FRAME_DROPPED
 	FrameSenderClosed FrameStatus = C.NOZZLE_FRAME_SENDER_CLOSED
-	FrameError       FrameStatus = C.NOZZLE_FRAME_ERROR
+	FrameError        FrameStatus = C.NOZZLE_FRAME_ERROR
 )
 
 // TextureOrigin controls pixel data row ordering.
@@ -193,18 +194,18 @@ const (
 type NativeFormatKind C.NozzleNativeFormatKind
 
 const (
-	NativeKindUnknown         NativeFormatKind = C.NOZZLE_NATIVE_KIND_UNKNOWN
-	NativeKindMTLPixelFormat  NativeFormatKind = C.NOZZLE_NATIVE_KIND_MTL_PIXEL_FORMAT
-	NativeKindDXGIFormat      NativeFormatKind = C.NOZZLE_NATIVE_KIND_DXGI_FORMAT
-	NativeKindDRMFourCC       NativeFormatKind = C.NOZZLE_NATIVE_KIND_DRM_FOURCC
+	NativeKindUnknown          NativeFormatKind = C.NOZZLE_NATIVE_KIND_UNKNOWN
+	NativeKindMTLPixelFormat   NativeFormatKind = C.NOZZLE_NATIVE_KIND_MTL_PIXEL_FORMAT
+	NativeKindDXGIFormat       NativeFormatKind = C.NOZZLE_NATIVE_KIND_DXGI_FORMAT
+	NativeKindDRMFourCC        NativeFormatKind = C.NOZZLE_NATIVE_KIND_DRM_FOURCC
 	NativeKindGLInternalFormat NativeFormatKind = C.NOZZLE_NATIVE_KIND_GL_INTERNAL_FORMAT
 )
 
 // SenderDesc configures a new sender.
 type SenderDesc struct {
-	Name               string
-	ApplicationName    string
-	RingBufferSize     uint32
+	Name                string
+	ApplicationName     string
+	RingBufferSize      uint32
 	AllowFormatFallback bool
 }
 
@@ -251,14 +252,18 @@ type FrameInfo struct {
 
 // MappedPixels provides access to frame pixel data.
 type MappedPixels struct {
-	Data           []byte
-	RowStrideBytes int
-	Width          int
-	Height         int
-	Format         TextureFormat
-	Origin         TextureOrigin
-	frame          *C.NozzleFrame
-	writable       bool
+	Data              []byte
+	RowStrideBytes    int
+	Width             int
+	Height            int
+	Format            TextureFormat
+	Origin            TextureOrigin
+	frame             *C.NozzleFrame
+	owner             *WritableFrame
+	writable          bool
+	locked            bool
+	osthreadLocked    bool
+	absRowStrideBytes int
 }
 
 // Row returns a byte slice for the given row, or an error if out of bounds.
@@ -266,22 +271,67 @@ func (m *MappedPixels) Row(y int) ([]byte, error) {
 	if y < 0 || y >= m.Height {
 		return nil, fmt.Errorf("row %d out of bounds (height %d)", y, m.Height)
 	}
-	start := y * m.RowStrideBytes
-	return m.Data[start : start+m.RowStrideBytes], nil
+	rowStride := m.RowStrideBytes
+	absStride := m.absRowStrideBytes
+	if absStride == 0 {
+		absStride = absInt(rowStride)
+	}
+	if absStride == 0 {
+		return nil, fmt.Errorf("invalid row stride %d", rowStride)
+	}
+	start := y * absStride
+	if rowStride < 0 {
+		start = (m.Height - 1 - y) * absStride
+	}
+	if start < 0 || start+absStride > len(m.Data) {
+		return nil, fmt.Errorf("row %d outside mapped pixel data", y)
+	}
+	return m.Data[start : start+absStride], nil
 }
 
-// Unmap releases the pixel mapping.
+// Unmap releases the pixel mapping and discards checked unlock errors.
+//
+// Read-only mappings returned by LockPixels are Go-owned copies; Unmap is a
+// no-op for them. Writable mappings are native views and must be unmapped on
+// the same goroutine that locked them.
 func (m *MappedPixels) Unmap() {
-	if m.frame == nil {
-		return
+	_ = m.UnmapChecked()
+}
+
+// UnmapChecked releases a writable pixel mapping and reports backend unlock
+// failures. It invalidates the MappedPixels even when unlock reports an error;
+// retrying after an error is unsupported.
+func (m *MappedPixels) UnmapChecked() error {
+	if m == nil {
+		return ErrorInvalidArgument
 	}
+	if !m.locked {
+		if m.writable {
+			return ErrorInvalidArgument
+		}
+		return nil
+	}
+
+	var err error
 	if m.writable {
-		C.nozzle_frame_unlock_writable_pixels(m.frame)
+		err = checkCode(C.nozzle_frame_unlock_writable_pixels_checked(m.frame))
 	} else {
 		C.nozzle_frame_unlock_pixels(m.frame)
 	}
-	m.frame = nil
+
+	osthreadLocked := m.osthreadLocked
+	if m.owner != nil && m.owner.activeMapping == m {
+		m.owner.activeMapping = nil
+	}
+	m.owner = nil
 	m.Data = nil
+	m.frame = nil
+	m.locked = false
+	m.osthreadLocked = false
+	if osthreadLocked {
+		runtime.UnlockOSThread()
+	}
+	return err
 }
 
 // Sender sends GPU textures to a named receiver.
@@ -297,10 +347,10 @@ func NewSender(desc SenderDesc) (*Sender, error) {
 	defer C.free(unsafe.Pointer(cAppName))
 
 	cDesc := C.NozzleSenderDesc{
-		name:                cName,
-		application_name:    cAppName,
-		ring_buffer_size:    C.uint32_t(desc.RingBufferSize),
-		fallback_flags:      C.uint32_t(3),
+		name:                 cName,
+		application_name:     cAppName,
+		ring_buffer_size:     C.uint32_t(desc.RingBufferSize),
+		fallback_flags:       C.uint32_t(3),
 		fallback_flags_valid: 1,
 	}
 
@@ -365,9 +415,9 @@ func NewReceiver(desc ReceiverDesc) (*Receiver, error) {
 	defer C.free(unsafe.Pointer(cAppName))
 
 	cDesc := C.NozzleReceiverDesc{
-		name:            cName,
+		name:             cName,
 		application_name: cAppName,
-		receive_mode:    C.NozzleReceiveMode(desc.ReceiveMode),
+		receive_mode:     C.NozzleReceiveMode(desc.ReceiveMode),
 	}
 
 	var raw *C.NozzleReceiver
@@ -442,50 +492,93 @@ func (f *Frame) Info() (FrameInfo, error) {
 		return FrameInfo{}, err
 	}
 	return FrameInfo{
-		FrameIndex:       uint64(raw.frame_index),
-		Timestamp:        uint64(raw.timestamp_ns),
-		Width:            uint32(raw.width),
-		Height:           uint32(raw.height),
-		Format:         TextureFormat(raw.format),
-		SemanticFormat: TextureFormat(raw.semantic_format),
+		FrameIndex:        uint64(raw.frame_index),
+		Timestamp:         uint64(raw.timestamp_ns),
+		Width:             uint32(raw.width),
+		Height:            uint32(raw.height),
+		Format:            TextureFormat(raw.format),
+		SemanticFormat:    TextureFormat(raw.semantic_format),
 		DroppedFrameCount: uint32(raw.dropped_frame_count),
 	}, nil
 }
 
-// LockPixels maps the frame pixel data for reading.
+// LockPixels copies the frame pixel data for reading.
+//
+// The C lock/copy/unlock sequence is performed in a short OS-thread-pinned
+// section because nozzle core pixel mappings are thread-affine. The returned
+// MappedPixels owns a Go copy; Unmap/UnmapChecked are no-ops for read-only
+// mappings.
 func (f *Frame) LockPixels(origin TextureOrigin) (*MappedPixels, error) {
-	return f.lockPixels(origin, false)
+	var mapped C.NozzleMappedPixels
+	runtime.LockOSThread()
+	locked := false
+	unlocked := false
+	defer func() {
+		if locked && !unlocked {
+			C.nozzle_frame_unlock_pixels(f.raw)
+		}
+		runtime.UnlockOSThread()
+	}()
+
+	if err := checkCode(C.nozzle_frame_lock_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)); err != nil {
+		return nil, err
+	}
+	locked = true
+
+	data, err := copyMappedPixels(mapped)
+	if err != nil {
+		return nil, err
+	}
+
+	C.nozzle_frame_unlock_pixels(f.raw)
+	unlocked = true
+
+	stride := int(mapped.row_stride_bytes)
+	absStride := absInt(stride)
+	return &MappedPixels{
+		Data:              data,
+		RowStrideBytes:    absStride,
+		Width:             int(mapped.width),
+		Height:            int(mapped.height),
+		Format:            TextureFormat(mapped.format),
+		Origin:            TextureOrigin(mapped.origin),
+		frame:             nil,
+		writable:          false,
+		locked:            false,
+		osthreadLocked:    false,
+		absRowStrideBytes: absStride,
+	}, nil
 }
 
 // LockWritablePixels maps the frame pixel data for writing.
 func (f *Frame) LockWritablePixels(origin TextureOrigin) (*MappedPixels, error) {
-	return f.lockPixels(origin, true)
-}
-
-func (f *Frame) lockPixels(origin TextureOrigin, writable bool) (*MappedPixels, error) {
 	var mapped C.NozzleMappedPixels
-	var rc C.NozzleErrorCode
-	if writable {
-		rc = C.nozzle_frame_lock_writable_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)
-	} else {
-		rc = C.nozzle_frame_lock_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)
-	}
-	if err := checkCode(rc); err != nil {
+	runtime.LockOSThread()
+	if err := checkCode(C.nozzle_frame_lock_writable_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)); err != nil {
+		runtime.UnlockOSThread()
 		return nil, err
 	}
 
-	totalSize := int(mapped.height) * int(mapped.row_stride_bytes)
-	data := C.GoBytes(mapped.data, C.int(totalSize))
+	data, err := nativeMappedPixelsSlice(mapped)
+	if err != nil {
+		C.nozzle_frame_unlock_writable_pixels(f.raw)
+		runtime.UnlockOSThread()
+		return nil, err
+	}
 
+	stride := int(mapped.row_stride_bytes)
 	return &MappedPixels{
-		Data:           data,
-		RowStrideBytes: int(mapped.row_stride_bytes),
-		Width:          int(mapped.width),
-		Height:         int(mapped.height),
-		Format:         TextureFormat(mapped.format),
-		Origin:         TextureOrigin(mapped.origin),
-		frame:          f.raw,
-		writable:       writable,
+		Data:              data,
+		RowStrideBytes:    stride,
+		Width:             int(mapped.width),
+		Height:            int(mapped.height),
+		Format:            TextureFormat(mapped.format),
+		Origin:            TextureOrigin(mapped.origin),
+		frame:             f.raw,
+		writable:          true,
+		locked:            true,
+		osthreadLocked:    true,
+		absRowStrideBytes: absInt(stride),
 	}, nil
 }
 
@@ -496,7 +589,8 @@ func (f *Frame) CopyToGLTexture(glName, glTarget, width, height uint32, format T
 
 // WritableFrame represents a frame that can receive pixel data.
 type WritableFrame struct {
-	raw *C.NozzleFrame
+	raw           *C.NozzleFrame
+	activeMapping *MappedPixels
 }
 
 // Info returns frame metadata.
@@ -506,41 +600,129 @@ func (f *WritableFrame) Info() (FrameInfo, error) {
 		return FrameInfo{}, err
 	}
 	return FrameInfo{
-		FrameIndex:       uint64(raw.frame_index),
-		Timestamp:        uint64(raw.timestamp_ns),
-		Width:            uint32(raw.width),
-		Height:           uint32(raw.height),
-		Format:           TextureFormat(raw.format),
-		SemanticFormat:   TextureFormat(raw.semantic_format),
+		FrameIndex:        uint64(raw.frame_index),
+		Timestamp:         uint64(raw.timestamp_ns),
+		Width:             uint32(raw.width),
+		Height:            uint32(raw.height),
+		Format:            TextureFormat(raw.format),
+		SemanticFormat:    TextureFormat(raw.semantic_format),
 		DroppedFrameCount: uint32(raw.dropped_frame_count),
 	}, nil
 }
 
 // LockWritablePixels maps the frame pixel data for writing.
+//
+// The returned Data slice is a native mapped view, not a Go-owned copy. The
+// current goroutine remains pinned to its OS thread until UnmapChecked or
+// Unmap is called. Do not pass writable mappings to another goroutine.
 func (f *WritableFrame) LockWritablePixels(origin TextureOrigin) (*MappedPixels, error) {
 	var mapped C.NozzleMappedPixels
+	runtime.LockOSThread()
 	if err := checkCode(C.nozzle_frame_lock_writable_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)); err != nil {
+		runtime.UnlockOSThread()
 		return nil, err
 	}
 
-	totalSize := int(mapped.height) * int(mapped.row_stride_bytes)
-	data := C.GoBytes(mapped.data, C.int(totalSize))
+	data, err := nativeMappedPixelsSlice(mapped)
+	if err != nil {
+		C.nozzle_frame_unlock_writable_pixels(f.raw)
+		runtime.UnlockOSThread()
+		return nil, err
+	}
 
-	return &MappedPixels{
-		Data:           data,
-		RowStrideBytes: int(mapped.row_stride_bytes),
-		Width:          int(mapped.width),
-		Height:         int(mapped.height),
-		Format:         TextureFormat(mapped.format),
-		Origin:         TextureOrigin(mapped.origin),
-		frame:          f.raw,
-		writable:       true,
-	}, nil
+	stride := int(mapped.row_stride_bytes)
+	pixels := &MappedPixels{
+		Data:              data,
+		RowStrideBytes:    stride,
+		Width:             int(mapped.width),
+		Height:            int(mapped.height),
+		Format:            TextureFormat(mapped.format),
+		Origin:            TextureOrigin(mapped.origin),
+		frame:             f.raw,
+		owner:             f,
+		writable:          true,
+		locked:            true,
+		osthreadLocked:    true,
+		absRowStrideBytes: absInt(stride),
+	}
+	f.activeMapping = pixels
+	return pixels, nil
 }
 
-// UnmapWritablePixels releases the writable pixel mapping.
+// UnmapWritablePixelsChecked releases the writable pixel mapping and reports
+// backend unlock failures. If this frame created a writable MappedPixels object,
+// the mapping state is shared so frame-level and mapping-level unmap both
+// invalidate the mapping and release the OS-thread pin exactly once.
+func (f *WritableFrame) UnmapWritablePixelsChecked() error {
+	if f.activeMapping != nil {
+		return f.activeMapping.UnmapChecked()
+	}
+	return checkCode(C.nozzle_frame_unlock_writable_pixels_checked(f.raw))
+}
+
+// UnmapWritablePixels releases the writable pixel mapping and discards checked
+// unlock errors.
 func (f *WritableFrame) UnmapWritablePixels() {
-	C.nozzle_frame_unlock_writable_pixels(f.raw)
+	_ = f.UnmapWritablePixelsChecked()
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func mappedSize(mapped C.NozzleMappedPixels) (int, int, error) {
+	stride := int(mapped.row_stride_bytes)
+	absStride := absInt(stride)
+	height := int(mapped.height)
+	if mapped.data == nil {
+		return 0, 0, fmt.Errorf("mapped pixel data is nil")
+	}
+	if absStride == 0 && height > 0 {
+		return 0, 0, fmt.Errorf("invalid row stride %d", stride)
+	}
+	if height < 0 {
+		return 0, 0, fmt.Errorf("invalid mapped height %d", height)
+	}
+	total := absStride * height
+	if height != 0 && total/height != absStride {
+		return 0, 0, fmt.Errorf("mapped pixel data size overflow")
+	}
+	return absStride, total, nil
+}
+
+func copyMappedPixels(mapped C.NozzleMappedPixels) ([]byte, error) {
+	absStride, total, err := mappedSize(mapped)
+	if err != nil {
+		return nil, err
+	}
+	data := make([]byte, total)
+	height := int(mapped.height)
+	stride := int(mapped.row_stride_bytes)
+	for y := 0; y < height; y++ {
+		offset := y * absStride
+		if stride < 0 {
+			offset = -offset
+		}
+		src := unsafe.Add(mapped.data, offset)
+		copy(data[y*absStride:(y+1)*absStride], unsafe.Slice((*byte)(src), absStride))
+	}
+	return data, nil
+}
+
+func nativeMappedPixelsSlice(mapped C.NozzleMappedPixels) ([]byte, error) {
+	absStride, total, err := mappedSize(mapped)
+	if err != nil {
+		return nil, err
+	}
+	base := mapped.data
+	height := int(mapped.height)
+	if int(mapped.row_stride_bytes) < 0 && height > 0 {
+		base = unsafe.Add(base, -((height - 1) * absStride))
+	}
+	return unsafe.Slice((*byte)(base), total), nil
 }
 
 // EnumerateSenders returns the count of active senders.

@@ -64,7 +64,12 @@ func main() {
     if err != nil {
         panic(err)
     }
-    defer frame.UnmapWritablePixels()
+    pixelsLocked := true
+    defer func() {
+        if pixelsLocked {
+            pixels.Unmap()
+        }
+    }()
 
     for y := 0; y < pixels.Height; y++ {
         row, _ := pixels.Row(y)
@@ -72,6 +77,11 @@ func main() {
             row[i] = 0xFF
         }
     }
+
+    if err := pixels.UnmapChecked(); err != nil {
+        panic(err)
+    }
+    pixelsLocked = false
 
     if err := sender.CommitFrame(frame); err != nil {
         panic(err)
@@ -141,6 +151,19 @@ if err != nil {
     }
 }
 ```
+
+## Pixel Mapping Semantics
+
+Read-only `LockPixels()` returns a Go-owned copy. Internally it performs the
+C lock/copy/unlock sequence in a short `runtime.LockOSThread()` section because
+nozzle core pixel mappings are thread-affine. No unmap is required for read-only
+copies, and `Unmap()` / `UnmapChecked()` are compatibility no-ops.
+
+Writable `LockWritablePixels()` returns a native mapped memory view, not a copy.
+The current goroutine stays pinned to its OS thread until `UnmapChecked()` or
+`Unmap()` is called. Do not pass writable mappings to another goroutine. New
+code should use `UnmapChecked()` and only call `CommitFrame()` after it succeeds;
+legacy `Unmap()` discards unlock errors.
 
 ## Texture Formats
 

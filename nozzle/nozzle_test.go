@@ -193,6 +193,61 @@ func TestMappedPixelsRowBounds(t *testing.T) {
 	}
 }
 
+func TestMappedPixelsRowNegativeStride(t *testing.T) {
+	data := make([]byte, 32)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	mp := MappedPixels{
+		Data:              data,
+		RowStrideBytes:    -8,
+		absRowStrideBytes: 8,
+		Width:             8,
+		Height:            4,
+	}
+	row0, err := mp.Row(0)
+	if err != nil {
+		t.Fatalf("Row(0) failed: %v", err)
+	}
+	if row0[0] != 24 {
+		t.Fatalf("negative-stride Row(0) starts at %d, want 24", row0[0])
+	}
+	row3, err := mp.Row(3)
+	if err != nil {
+		t.Fatalf("Row(3) failed: %v", err)
+	}
+	if row3[0] != 0 {
+		t.Fatalf("negative-stride Row(3) starts at %d, want 0", row3[0])
+	}
+}
+
+func TestReadOnlyMappedPixelsUnmapCheckedIsNoop(t *testing.T) {
+	mp := MappedPixels{
+		Data:           []byte{1, 2, 3, 4},
+		RowStrideBytes: 4,
+		Width:          4,
+		Height:         1,
+		writable:       false,
+		locked:         false,
+	}
+	if err := mp.UnmapChecked(); err != nil {
+		t.Fatalf("read-only copy UnmapChecked() = %v, want nil", err)
+	}
+	if len(mp.Data) != 4 {
+		t.Fatalf("read-only copy data was invalidated")
+	}
+}
+
+func TestWritableMappedPixelsDoubleUnmapCheckedFails(t *testing.T) {
+	mp := MappedPixels{
+		writable: true,
+		locked:   false,
+	}
+	if err := mp.UnmapChecked(); err != ErrorInvalidArgument {
+		t.Fatalf("second writable UnmapChecked() = %v, want %v", err, ErrorInvalidArgument)
+	}
+}
+
 func TestSenderCreateAndDestroy(t *testing.T) {
 	s, err := NewSender(SenderDesc{
 		Name:            "go-test-sender",
@@ -276,6 +331,49 @@ func TestSenderWritableFrame(t *testing.T) {
 		t.Errorf("format bpp = %d, want 4", info.Format.BytesPerPixel())
 	}
 
+	if err := frame.UnmapWritablePixelsChecked(); err != ErrorInvalidArgument {
+		t.Fatalf("no-active UnmapWritablePixelsChecked = %v, want %v", err, ErrorInvalidArgument)
+	}
+
+	frameLevelPixels, err := frame.LockWritablePixels(OriginTopLeft)
+	if err != nil {
+		t.Skipf("frame-level lock pixels failed: %v", err)
+	}
+	frameLevelLocked := true
+	defer func() {
+		if frameLevelLocked {
+			frameLevelPixels.Unmap()
+		}
+	}()
+	if err := frame.UnmapWritablePixelsChecked(); err != nil {
+		t.Fatalf("frame-level UnmapWritablePixelsChecked failed: %v", err)
+	}
+	frameLevelLocked = false
+	if frameLevelPixels.Data != nil {
+		t.Fatalf("frame-level UnmapWritablePixelsChecked did not invalidate Data")
+	}
+	if err := frameLevelPixels.UnmapChecked(); err != ErrorInvalidArgument {
+		t.Fatalf("mapping UnmapChecked after frame-level unmap = %v, want %v", err, ErrorInvalidArgument)
+	}
+
+	bottomLeftPixels, err := frame.LockWritablePixels(OriginBottomLeft)
+	if err != nil {
+		t.Skipf("bottom-left lock pixels failed: %v", err)
+	}
+	bottomLeftLocked := true
+	defer func() {
+		if bottomLeftLocked {
+			bottomLeftPixels.Unmap()
+		}
+	}()
+	if _, err := bottomLeftPixels.Row(0); err != nil {
+		t.Fatalf("bottom-left Row(0) failed: %v", err)
+	}
+	if err := bottomLeftPixels.UnmapChecked(); err != nil {
+		t.Fatalf("bottom-left UnmapChecked failed: %v", err)
+	}
+	bottomLeftLocked = false
+
 	pixels, err := frame.LockWritablePixels(OriginTopLeft)
 	if err != nil {
 		t.Skipf("lock pixels failed: %v", err)
@@ -283,7 +381,7 @@ func TestSenderWritableFrame(t *testing.T) {
 	pixelsLocked := true
 	defer func() {
 		if pixelsLocked {
-			frame.UnmapWritablePixels()
+			pixels.Unmap()
 		}
 	}()
 
@@ -293,8 +391,16 @@ func TestSenderWritableFrame(t *testing.T) {
 	for i := range pixels.Data {
 		pixels.Data[i] = 0xFF
 	}
-	frame.UnmapWritablePixels()
+	if err := pixels.UnmapChecked(); err != nil {
+		t.Fatalf("UnmapChecked failed: %v", err)
+	}
 	pixelsLocked = false
+	if pixels.Data != nil {
+		t.Fatalf("UnmapChecked did not invalidate Data")
+	}
+	if err := pixels.UnmapChecked(); err != ErrorInvalidArgument {
+		t.Fatalf("second UnmapChecked = %v, want %v", err, ErrorInvalidArgument)
+	}
 
 	if err := s.CommitFrame(frame); err != nil {
 		t.Fatalf("CommitFrame failed: %v", err)
