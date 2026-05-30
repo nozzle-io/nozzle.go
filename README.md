@@ -154,10 +154,10 @@ if err != nil {
 
 ## Pixel Mapping Semantics
 
-Read-only `LockPixels()` returns a Go-owned copy. Internally it performs the
-C lock/copy/unlock sequence in a short `runtime.LockOSThread()` section because
-nozzle core pixel mappings are thread-affine. No unmap is required for read-only
-copies, and `Unmap()` / `UnmapChecked()` are compatibility no-ops.
+Read-only `LockPixels()` returns a Go-owned copy. Core performs the
+lock/copy/unlock sequence inside one C API call, so the Go binding does not need
+to pin the goroutine to an OS thread for read-only copies. No unmap is required
+for read-only copies, and `Unmap()` / `UnmapChecked()` are compatibility no-ops.
 
 Writable `LockWritablePixels()` returns a native mapped memory view, not a copy.
 The current goroutine stays pinned to its OS thread until `UnmapChecked()` or

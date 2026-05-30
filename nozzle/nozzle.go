@@ -504,40 +504,45 @@ func (f *Frame) Info() (FrameInfo, error) {
 
 // LockPixels copies the frame pixel data for reading.
 //
-// The C lock/copy/unlock sequence is performed in a short OS-thread-pinned
-// section because nozzle core pixel mappings are thread-affine. The returned
+// The core C API performs lock/copy/unlock inside a single call, so read-only
+// callers do not need to pin the goroutine to an OS thread. The returned
 // MappedPixels owns a Go copy; Unmap/UnmapChecked are no-ops for read-only
 // mappings.
 func (f *Frame) LockPixels(origin TextureOrigin) (*MappedPixels, error) {
-	var mapped C.NozzleMappedPixels
-	runtime.LockOSThread()
-	locked := false
-	unlocked := false
-	defer func() {
-		if locked && !unlocked {
-			C.nozzle_frame_unlock_pixels(f.raw)
-		}
-		runtime.UnlockOSThread()
-	}()
-
-	if err := checkCode(C.nozzle_frame_lock_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)); err != nil {
+	info, err := f.Info()
+	if err != nil {
 		return nil, err
 	}
-	locked = true
-
-	data, err := copyMappedPixels(mapped)
+	resolved, err := f.ResolvedFormat()
+	if err != nil {
+		return nil, err
+	}
+	rowStride, total, err := compactPixelCopySize(
+		int(info.Width), int(info.Height), int(resolved.BytesPerPixel))
 	if err != nil {
 		return nil, err
 	}
 
-	C.nozzle_frame_unlock_pixels(f.raw)
-	unlocked = true
+	data := make([]byte, total)
+	var mapped C.NozzleMappedPixels
+	if err := checkCode(C.nozzle_frame_copy_pixels_with_origin(
+		f.raw,
+		C.NozzleTextureOrigin(origin),
+		unsafe.Pointer(&data[0]),
+		C.uint64_t(len(data)),
+		&mapped,
+	)); err != nil {
+		return nil, err
+	}
 
 	stride := int(mapped.row_stride_bytes)
-	absStride := absInt(stride)
+	if stride != rowStride {
+		rowStride = stride
+	}
+	absStride := absInt(rowStride)
 	return &MappedPixels{
 		Data:              data,
-		RowStrideBytes:    absStride,
+		RowStrideBytes:    rowStride,
 		Width:             int(mapped.width),
 		Height:            int(mapped.height),
 		Format:            TextureFormat(mapped.format),
@@ -673,6 +678,24 @@ func absInt(v int) int {
 	return v
 }
 
+func compactPixelCopySize(width, height, bytesPerPixel int) (int, int, error) {
+	if width <= 0 || height <= 0 {
+		return 0, 0, fmt.Errorf("invalid pixel dimensions %dx%d", width, height)
+	}
+	if bytesPerPixel <= 0 {
+		return 0, 0, fmt.Errorf("invalid bytes per pixel %d", bytesPerPixel)
+	}
+	rowStride := width * bytesPerPixel
+	if rowStride/bytesPerPixel != width {
+		return 0, 0, fmt.Errorf("pixel row size overflow")
+	}
+	total := rowStride * height
+	if total/height != rowStride {
+		return 0, 0, fmt.Errorf("pixel data size overflow")
+	}
+	return rowStride, total, nil
+}
+
 func mappedSize(mapped C.NozzleMappedPixels) (int, int, error) {
 	stride := int(mapped.row_stride_bytes)
 	absStride := absInt(stride)
@@ -691,25 +714,6 @@ func mappedSize(mapped C.NozzleMappedPixels) (int, int, error) {
 		return 0, 0, fmt.Errorf("mapped pixel data size overflow")
 	}
 	return absStride, total, nil
-}
-
-func copyMappedPixels(mapped C.NozzleMappedPixels) ([]byte, error) {
-	absStride, total, err := mappedSize(mapped)
-	if err != nil {
-		return nil, err
-	}
-	data := make([]byte, total)
-	height := int(mapped.height)
-	stride := int(mapped.row_stride_bytes)
-	for y := 0; y < height; y++ {
-		offset := y * absStride
-		if stride < 0 {
-			offset = -offset
-		}
-		src := unsafe.Add(mapped.data, offset)
-		copy(data[y*absStride:(y+1)*absStride], unsafe.Slice((*byte)(src), absStride))
-	}
-	return data, nil
 }
 
 func nativeMappedPixelsSlice(mapped C.NozzleMappedPixels) ([]byte, error) {
