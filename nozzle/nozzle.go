@@ -259,6 +259,7 @@ type MappedPixels struct {
 	Format            TextureFormat
 	Origin            TextureOrigin
 	frame             *C.NozzleFrame
+	mapping           *C.NozzlePixelMapping
 	owner             *WritableFrame
 	writable          bool
 	locked            bool
@@ -292,8 +293,8 @@ func (m *MappedPixels) Row(y int) ([]byte, error) {
 // Unmap releases the pixel mapping and discards checked unlock errors.
 //
 // Read-only mappings returned by LockPixels are Go-owned copies; Unmap is a
-// no-op for them. Writable mappings are native views and must be unmapped on
-// the same goroutine that locked them.
+// no-op for them. Writable mappings are native views owned by an opaque core
+// mapping handle.
 func (m *MappedPixels) Unmap() {
 	_ = m.UnmapChecked()
 }
@@ -314,9 +315,17 @@ func (m *MappedPixels) UnmapChecked() error {
 
 	var err error
 	if m.writable {
-		err = checkCode(C.nozzle_frame_unlock_writable_pixels_checked(m.frame))
+		if m.mapping != nil {
+			err = checkCode(C.nozzle_pixel_mapping_unlock_checked(&m.mapping))
+		} else {
+			err = checkCode(C.nozzle_frame_unlock_writable_pixels_checked(m.frame))
+		}
 	} else {
-		C.nozzle_frame_unlock_pixels(m.frame)
+		if m.mapping != nil {
+			C.nozzle_pixel_mapping_unlock(&m.mapping)
+		} else {
+			C.nozzle_frame_unlock_pixels(m.frame)
+		}
 	}
 
 	osthreadLocked := m.osthreadLocked
@@ -326,6 +335,7 @@ func (m *MappedPixels) UnmapChecked() error {
 	m.owner = nil
 	m.Data = nil
 	m.frame = nil
+	m.mapping = nil
 	m.locked = false
 	m.osthreadLocked = false
 	if osthreadLocked {
@@ -558,16 +568,15 @@ func (f *Frame) LockPixels(origin TextureOrigin) (*MappedPixels, error) {
 // LockWritablePixels maps the frame pixel data for writing.
 func (f *Frame) LockWritablePixels(origin TextureOrigin) (*MappedPixels, error) {
 	var mapped C.NozzleMappedPixels
-	runtime.LockOSThread()
-	if err := checkCode(C.nozzle_frame_lock_writable_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)); err != nil {
-		runtime.UnlockOSThread()
+	var mapping *C.NozzlePixelMapping
+	if err := checkCode(C.nozzle_frame_lock_writable_pixels_mapping_with_origin(
+		f.raw, C.NozzleTextureOrigin(origin), &mapping, &mapped)); err != nil {
 		return nil, err
 	}
 
 	data, err := nativeMappedPixelsSlice(mapped)
 	if err != nil {
-		C.nozzle_frame_unlock_writable_pixels(f.raw)
-		runtime.UnlockOSThread()
+		C.nozzle_pixel_mapping_unlock(&mapping)
 		return nil, err
 	}
 
@@ -580,9 +589,10 @@ func (f *Frame) LockWritablePixels(origin TextureOrigin) (*MappedPixels, error) 
 		Format:            TextureFormat(mapped.format),
 		Origin:            TextureOrigin(mapped.origin),
 		frame:             f.raw,
+		mapping:           mapping,
 		writable:          true,
 		locked:            true,
-		osthreadLocked:    true,
+		osthreadLocked:    false,
 		absRowStrideBytes: absInt(stride),
 	}, nil
 }
@@ -618,20 +628,18 @@ func (f *WritableFrame) Info() (FrameInfo, error) {
 // LockWritablePixels maps the frame pixel data for writing.
 //
 // The returned Data slice is a native mapped view, not a Go-owned copy. The
-// current goroutine remains pinned to its OS thread until UnmapChecked or
-// Unmap is called. Do not pass writable mappings to another goroutine.
+// native mapping lifetime is owned by an opaque core mapping handle.
 func (f *WritableFrame) LockWritablePixels(origin TextureOrigin) (*MappedPixels, error) {
 	var mapped C.NozzleMappedPixels
-	runtime.LockOSThread()
-	if err := checkCode(C.nozzle_frame_lock_writable_pixels_with_origin(f.raw, C.NozzleTextureOrigin(origin), &mapped)); err != nil {
-		runtime.UnlockOSThread()
+	var mapping *C.NozzlePixelMapping
+	if err := checkCode(C.nozzle_frame_lock_writable_pixels_mapping_with_origin(
+		f.raw, C.NozzleTextureOrigin(origin), &mapping, &mapped)); err != nil {
 		return nil, err
 	}
 
 	data, err := nativeMappedPixelsSlice(mapped)
 	if err != nil {
-		C.nozzle_frame_unlock_writable_pixels(f.raw)
-		runtime.UnlockOSThread()
+		C.nozzle_pixel_mapping_unlock(&mapping)
 		return nil, err
 	}
 
@@ -644,10 +652,11 @@ func (f *WritableFrame) LockWritablePixels(origin TextureOrigin) (*MappedPixels,
 		Format:            TextureFormat(mapped.format),
 		Origin:            TextureOrigin(mapped.origin),
 		frame:             f.raw,
+		mapping:           mapping,
 		owner:             f,
 		writable:          true,
 		locked:            true,
-		osthreadLocked:    true,
+		osthreadLocked:    false,
 		absRowStrideBytes: absInt(stride),
 	}
 	f.activeMapping = pixels

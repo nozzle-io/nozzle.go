@@ -407,6 +407,41 @@ func TestSenderWritableFrame(t *testing.T) {
 	}
 }
 
+func TestWritableMappedPixelsUnmapCheckedFromAnotherGoroutine(t *testing.T) {
+	s, err := NewSender(SenderDesc{
+		Name:            "go-test-cross-goroutine-unmap",
+		ApplicationName: "go-test",
+	})
+	if err != nil {
+		t.Skipf("no GPU: %v", err)
+	}
+	defer s.Close()
+
+	frame, err := s.AcquireWritableFrame(8, 8, FormatRGBA8UNorm)
+	if err != nil {
+		t.Skipf("acquire frame failed: %v", err)
+	}
+
+	pixels, err := frame.LockWritablePixels(OriginTopLeft)
+	if err != nil {
+		t.Skipf("lock pixels failed: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- pixels.UnmapChecked()
+	}()
+	if err := <-errCh; err != nil {
+		t.Fatalf("cross-goroutine UnmapChecked failed: %v", err)
+	}
+	if pixels.Data != nil {
+		t.Fatalf("cross-goroutine UnmapChecked did not invalidate Data")
+	}
+	if err := s.CommitFrame(frame); err != nil {
+		t.Fatalf("CommitFrame after cross-goroutine UnmapChecked failed: %v", err)
+	}
+}
+
 func TestIsGPUAvailable(t *testing.T) {
 	t.Logf("GPU available: %v", IsGPUAvailable())
 }
