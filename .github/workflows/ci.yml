@@ -42,3 +42,10 @@ jobs:
 
       - name: Test
         run: go test ./nozzle/ -v -count=1
+
+      - name: Verify F16C dispatcher link
+        if: runner.os == 'Linux'
+        run: |
+          make clean
+          make EXTRA_CXXFLAGS=-mf16c
+          go test -a ./nozzle/ -run '^TestTextureFormatBytesPerPixel$' -count=1
