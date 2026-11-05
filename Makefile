@@ -19,6 +19,8 @@ endif
 
 # Common sources
 include $(NOZZLE_DIR)/sources/sources.mk
+# The build output depends on these lists as well as on its objects.
+NOZZLE_SOURCE_INPUTS := $(wildcard $(NOZZLE_DIR)/sources/*)
 
 COMMON_SRCS := $(NOZZLE_COMMON_SRCS) $(NOZZLE_OPENGL_SRCS)
 
@@ -56,9 +58,11 @@ LIB := $(BUILD_DIR)/libnozzle.a
 
 all: $(LIB)
 
-$(LIB): $(ALL_OBJS)
+$(LIB): $(ALL_OBJS) $(NOZZLE_SOURCE_INPUTS)
 	@mkdir -p $(dir $@)
-	$(AR) rcs $@ $^
+	@# ar only adds members, so remove the archive to drop objects no longer listed.
+	@rm -f $@
+	$(AR) rcs $@ $(ALL_OBJS)
 
 $(BUILD_DIR)/%.o: %.cpp
 	@mkdir -p $(dir $@)
