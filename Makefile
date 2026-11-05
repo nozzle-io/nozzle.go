@@ -6,6 +6,7 @@ CXX := c++
 AR := ar
 
 CXXFLAGS := -std=c++17 -fno-exceptions -fno-rtti -O2
+EXTRA_CXXFLAGS ?=
 
 UNAME_S := $(shell uname -s)
 ifeq ($(OS),Windows_NT)
@@ -31,6 +32,7 @@ COMMON_SRCS := \
 	$(NOZZLE_DIR)/src/common/channel_swizzle.cpp \
 	$(NOZZLE_DIR)/src/common/format_convert.cpp \
 	$(NOZZLE_DIR)/src/common/format_convert_sse2.cpp \
+	$(NOZZLE_DIR)/src/common/format_convert_f16c.cpp \
 	$(NOZZLE_DIR)/src/common/format_convert_neon.cpp \
 	$(NOZZLE_DIR)/src/common/format_resolve.cpp \
 	$(NOZZLE_DIR)/src/common/backend_capabilities.cpp \
@@ -64,6 +66,8 @@ ifeq ($(PLATFORM),windows)
 		$(NOZZLE_DIR)/src/backends/d3d11/d3d11_sync.cpp
 	LDFLAGS := -ld3d11 -ldxgi -lopengl32 -lbcrypt -lc++
 endif
+
+CXXFLAGS += $(EXTRA_CXXFLAGS)
 
 INCLUDES := -I$(NOZZLE_DIR)/include -I$(NOZZLE_DIR)/src -I$(PLOG_DIR)
 ifeq ($(PLATFORM),linux)
