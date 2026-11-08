@@ -239,6 +239,13 @@ type ConnectedSenderInfo struct {
 	LastUpdateTime  uint64
 }
 
+// ConnectionSnapshot owns last-known metadata and the receiver's last-observed
+// connection state. It is not a fresh liveness check.
+type ConnectionSnapshot struct {
+	Connected bool
+	Info      ConnectedSenderInfo
+}
+
 // FrameInfo contains frame metadata.
 type FrameInfo struct {
 	FrameIndex        uint64
@@ -398,16 +405,17 @@ func (s *Sender) PublishGLTexture(glName, glTarget, width, height uint32, format
 	return checkCode(C.nozzle_sender_publish_gl_texture(s.raw, C.uint32_t(glName), C.uint32_t(glTarget), C.uint32_t(width), C.uint32_t(height), C.NozzleTextureFormat(format)))
 }
 
-// Info returns sender metadata.
+// Info returns owned sender metadata that survives later calls and Close.
+// Close must not race this call or other uses of the sender.
 func (s *Sender) Info() (SenderInfo, error) {
-	var raw C.NozzleSenderInfo
-	if err := checkCode(C.nozzle_sender_get_info(s.raw, &raw)); err != nil {
+	var raw C.NozzleSenderInfoSnapshot
+	if err := checkCode(C.nozzle_sender_get_info_snapshot(s.raw, &raw)); err != nil {
 		return SenderInfo{}, err
 	}
 	return SenderInfo{
-		Name:            C.GoString(raw.name),
-		ApplicationName: C.GoString(raw.application_name),
-		ID:              C.GoString(raw.id),
+		Name:            snapshotString(raw.name[:]),
+		ApplicationName: snapshotString(raw.application_name[:]),
+		ID:              snapshotString(raw.id[:]),
 		Backend:         BackendType(raw.backend),
 	}, nil
 }
@@ -455,31 +463,48 @@ func (r *Receiver) AcquireFrame(timeoutMs uint64) (*Frame, error) {
 	return &Frame{raw: raw}, nil
 }
 
-// ConnectedInfo returns info about the connected sender.
+// ConnectedInfo returns owned last-known metadata, including after an observed
+// disconnect. Success does not imply a connection; see ConnectionSnapshot.
 func (r *Receiver) ConnectedInfo() (ConnectedSenderInfo, error) {
-	var raw C.NozzleConnectedSenderInfo
-	if err := checkCode(C.nozzle_receiver_get_connected_info(r.raw, &raw)); err != nil {
+	snapshot, err := r.ConnectionSnapshot()
+	if err != nil {
 		return ConnectedSenderInfo{}, err
 	}
-	return ConnectedSenderInfo{
-		Name:            C.GoString(raw.name),
-		ApplicationName: C.GoString(raw.application_name),
-		ID:              C.GoString(raw.id),
-		Backend:         BackendType(raw.backend),
-		Width:           uint32(raw.width),
-		Height:          uint32(raw.height),
-		Format:          TextureFormat(raw.format),
-		SemanticFormat:  TextureFormat(raw.semantic_format),
-		EstimatedFPS:    float64(raw.estimated_fps),
-		FrameCounter:    uint64(raw.frame_counter),
-		LastUpdateTime:  uint64(raw.last_update_time_ns),
+	return snapshot.Info, nil
+}
+
+// ConnectionSnapshot copies state and metadata together under the native
+// receiver lock. Strings remain valid after later calls and Close. The state is
+// last-observed, not fresh liveness, and identity is retained after disconnect.
+// This does not reconnect. Close must not race this call or other receiver uses.
+func (r *Receiver) ConnectionSnapshot() (ConnectionSnapshot, error) {
+	var raw C.NozzleConnectedSenderSnapshot
+	if err := checkCode(C.nozzle_receiver_get_connected_info_snapshot(r.raw, &raw)); err != nil {
+		return ConnectionSnapshot{}, err
+	}
+	return ConnectionSnapshot{
+		Connected: raw.connected != 0,
+		Info: ConnectedSenderInfo{
+			Name:            snapshotString(raw.name[:]),
+			ApplicationName: snapshotString(raw.application_name[:]),
+			ID:              snapshotString(raw.id[:]),
+			Backend:         BackendType(raw.backend),
+			Width:           uint32(raw.width),
+			Height:          uint32(raw.height),
+			Format:          TextureFormat(raw.format),
+			SemanticFormat:  TextureFormat(raw.semantic_format),
+			EstimatedFPS:    float64(raw.estimated_fps),
+			FrameCounter:    uint64(raw.frame_counter),
+			LastUpdateTime:  uint64(raw.last_update_time_ns),
+		},
 	}, nil
 }
 
-// IsConnected returns whether a sender is connected.
+// IsConnected returns last-observed connection state, or false on snapshot error.
+// A sender may have exited since the receiver last observed it.
 func (r *Receiver) IsConnected() bool {
-	_, err := r.ConnectedInfo()
-	return err == nil
+	snapshot, err := r.ConnectionSnapshot()
+	return err == nil && snapshot.Connected
 }
 
 // Frame represents a received GPU texture.
