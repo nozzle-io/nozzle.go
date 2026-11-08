@@ -116,6 +116,31 @@ if err != nil {
 fmt.Printf("%dx%d frame #%d\n", info.Width, info.Height, info.FrameIndex)
 ```
 
+### Metadata Snapshots
+
+`sender.Info()` returns owned sender metadata. `receiver.ConnectionSnapshot()`
+returns `ConnectionSnapshot{Connected, Info}`, copying state and metadata
+together under the native receiver lock. Inline C strings are copied within
+their array bounds; Go strings preserve the original bytes, including invalid
+UTF-8, rather than applying lossy decoding. Results survive later calls and
+handle closure.
+
+`Connected` is the receiver's last-observed state, not fresh liveness or a
+reconnect attempt. After acquisition observes a disconnect, it is false while
+`Info` retains last-known identity. `ConnectedInfo()` preserves its existing
+public fields and returns that info even while disconnected. `IsConnected()`
+reads the snapshot flag and returns false on retrieval error. A sender can exit
+after the receiver last observed it; acquisition errors observe closure.
+
+This does not change handle lifetime or concurrency rules: `Close` must not race
+any other use of the same sender/receiver, and a snapshot call does not retain
+the native handle against concurrent closure.
+
+Pure string tests cover signed/unsigned bytes, NUL boundaries, invalid UTF-8,
+and copying. Required macOS Metal tests cover same-process closure and retained
+metadata, not cross-process transfer, GPU pixels, native wide-counter values,
+or Windows/Linux runtime behavior.
+
 ### Discovery
 
 ```go

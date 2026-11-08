@@ -41,6 +41,10 @@ func TestObservedSenderClosureReportsDisconnected(t *testing.T) {
 	if !receiver.IsConnected() || retained.ID == "" {
 		t.Fatal("receiver must initially be connected with a sender ID")
 	}
+	initial, err := receiver.ConnectionSnapshot()
+	if err != nil || !initial.Connected || initial.Info != retained {
+		t.Fatalf("initial snapshot = %+v, %v", initial, err)
+	}
 	// No writable frames retain the sender. Acquire observes the closed marker
 	// before waiting for a frame, even with a zero timeout.
 	sender.Close()
@@ -66,6 +70,13 @@ func TestObservedSenderClosureReportsDisconnected(t *testing.T) {
 	if connected {
 		t.Fatal("observed SenderClosed must report disconnected")
 	}
+	closed, err := receiver.ConnectionSnapshot()
+	if err != nil || closed.Connected || closed.Info != lastKnown {
+		t.Fatalf("closed snapshot = %+v, %v", closed, err)
+	}
+	if !initial.Connected || initial.Info != retained {
+		t.Fatal("retained initial snapshot changed")
+	}
 }
 
 func TestMetadataRemainsOwnedAfterHandleClose(t *testing.T) {
@@ -86,6 +97,10 @@ func TestMetadataRemainsOwnedAfterHandleClose(t *testing.T) {
 	if err != nil || laterReceiver != receiverInfo {
 		t.Fatalf("later receiver metadata = %+v, %v", laterReceiver, err)
 	}
+	snapshot, err := receiver.ConnectionSnapshot()
+	if err != nil || !snapshot.Connected || snapshot.Info != receiverInfo {
+		t.Fatalf("owned snapshot = %+v, %v", snapshot, err)
+	}
 	receiver.Close()
 	sender.Close()
 	if senderInfo.Name != name || senderInfo.ApplicationName != application ||
@@ -93,6 +108,21 @@ func TestMetadataRemainsOwnedAfterHandleClose(t *testing.T) {
 		senderInfo.ID == "" || receiverInfo.ID != senderInfo.ID ||
 		senderInfo.Backend != BackendMetal || receiverInfo.Backend != BackendMetal {
 		t.Fatalf("retained UTF-8 identity changed: sender=%+v receiver=%+v", senderInfo, receiverInfo)
+	}
+	if !snapshot.Connected || snapshot.Info != receiverInfo {
+		t.Fatal("owned snapshot changed after Close")
+	}
+	if got, err := receiver.ConnectionSnapshot(); err != ErrorInvalidArgument || got != (ConnectionSnapshot{}) {
+		t.Fatalf("closed receiver snapshot = %+v, %v", got, err)
+	}
+	if receiver.IsConnected() {
+		t.Fatal("closed receiver must report false on snapshot error")
+	}
+	if _, err := receiver.ConnectedInfo(); err != ErrorInvalidArgument {
+		t.Fatalf("closed receiver metadata error = %v", err)
+	}
+	if _, err := sender.Info(); err != ErrorInvalidArgument {
+		t.Fatalf("closed sender metadata error = %v", err)
 	}
 	t.Log("GO_INFO_OWNED PASS retained UTF-8 identity after both handles closed")
 }
